@@ -22,8 +22,7 @@ Print this help screen
 Print version and license information
 
 This plugin uses the 'snmpget' command and 'snmpwalk' command included with the NET-SNMP package.
-This plugin support performance data output.
-If the percentage of the warning level and the critical level are 0, then the script returns a state OK.
+This plugin support performance data output. If the percentage of the warning level and the critical level are 0, then the script returns a state OK.
 
 Examples :
 
