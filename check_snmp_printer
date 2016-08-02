@@ -1,0 +1,197 @@
+#!/bin/bash
+
+# check_snmp_printer
+# Description : Check the status of a printer
+# Version : 1.0
+# Author : Yoann LAMY
+# Licence : GPLv2
+
+# Commands
+CMD_BASENAME="/bin/basename"
+CMD_SNMPGET="/usr/bin/snmpget"
+CMD_SNMPWALK="/usr/bin/snmpwalk"
+CMD_GREP="/bin/grep"
+CMD_AWK="/bin/awk"
+CMD_EXPR="/usr/bin/expr"
+
+# Script name
+SCRIPTNAME=`$CMD_BASENAME $0`
+
+# Version
+VERSION="1.0"
+
+# Plugin return codes
+STATE_OK=0
+STATE_WARNING=1
+STATE_CRITICAL=2
+STATE_UNKNOWN=3
+
+# Default OID (Printer-MIB)
+OID_NAME=".1.3.6.1.2.1.43.11.1.1.6.1"
+OID_TOTAL=".1.3.6.1.2.1.43.11.1.1.8.1"
+OID_STATUS=".1.3.6.1.2.1.43.11.1.1.9.1"
+
+OID_NAME_OTHER=".1.3.6.1.2.1.43.12.1.1.4.1"
+OID_TOTAL_OTHER=".1.3.6.1.2.1.43.10.2.1.9.1"
+OID_STATUS_OTHER=".1.3.6.1.2.1.43.10.2.1.10.1"
+
+OID_PAGE=".1.3.6.1.2.1.43.10.2.1.4.1.1"
+
+# Default variables
+DESCRIPTION="Unknown"
+STATE=$STATE_UNKNOWN
+
+# Default options
+COMMUNITY="public"
+HOSTNAME="127.0.0.1"
+TYPE="page"
+CONSUMMABLE="black"
+WARNING=0
+CRITICAL=0
+
+# Option processing
+print_usage() {
+  echo "Usage: ./check_snmp_printer -H 127.0.0.1 -C public -t consummable -o black -w 85 -c 90"
+  echo "  $SCRIPTNAME -H ADDRESS"
+  echo "  $SCRIPTNAME -C STRING"
+  echo "  $SCRIPTNAME -t STRING"
+  echo "  $SCRIPTNAME -w INTEGER"
+  echo "  $SCRIPTNAME -c INTEGER"
+  echo "  $SCRIPTNAME -h"
+  echo "  $SCRIPTNAME -V"
+}
+
+print_version() {
+  echo $SCRIPTNAME version $VERSION
+  echo ""
+  echo "The nagios plugins come with ABSOLUTELY NO WARRANTY."
+  echo "You may redistribute copies of the plugins under the terms of the GNU General Public License v2."
+}
+
+print_help() {
+  print_version
+  echo ""
+  print_usage
+  echo ""
+  echo "Check the status of the printer"
+  echo ""
+  echo "-H ADDRESS"
+  echo "   Name or IP address of host (default: 127.0.0.1)"
+  echo "-C STRING"
+  echo "   Community name for the host's SNMP agent (default: public)"
+  echo "-t STRING"
+  echo "   Check type (consummable, page) (default: page)"
+  echo "-o STRING"
+  echo "   Consummable (black, cyan, magenta, yellow, drum) (default: black)"
+  echo "-w INTEGER"
+  echo "   Warning level for consummable in percent (default: 0)"
+  echo "-c INTEGER"
+  echo "   Critical level for consummable in percent (default: 0)"
+  echo "-h"
+  echo "   Print this help screen"
+  echo "-V"
+  echo "   Print version and license information"
+  echo ""
+  echo ""
+  echo "This plugin uses the 'snmpget' command and 'snmpwalk' command included with the NET-SNMP package."
+  echo "This plugin support performance data output."
+  echo "If the percentage of the warning level and the critical level are 0, then the script returns a state OK."
+}
+
+while getopts H:C:t:o:w:c:hV OPT
+do
+  case $OPT in
+    H) HOSTNAME="$OPTARG" ;;
+    C) COMMUNITY="$OPTARG" ;;
+    t) TYPE="$OPTARG" ;;
+    o) CONSUMMABLE="$OPTARG" ;;
+    w) WARNING=$OPTARG ;;
+    c) CRITICAL=$OPTARG ;;
+    h)
+      print_help
+      exit $STATE_UNKNOWN
+      ;;
+    V)
+      print_version
+      exit $STATE_UNKNOWN
+      ;;
+   esac
+done
+
+# Plugin processing
+if [ $TYPE = "consummable" ]; then
+  # Check the consummable of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t consummable -o black -w 85 -c 90)
+  CONSUMMABLE_NAME=$CONSUMMABLE
+
+  if [ $CONSUMMABLE = "black" ]; then
+    CONSUMMABLE_NAME="black\|cartouche\|toner"
+  fi
+
+  CONSUMMABLE_ID=`$CMD_SNMPWALK -t 2 -r 2 -v 1 -c $COMMUNITY $HOSTNAME $OID_NAME | $CMD_GREP -i "${CONSUMMABLE_NAME}" | $CMD_AWK '{ print $1 }' | $CMD_AWK -F "." '{print $NF}'`
+  if [ -z "$CONSUMMABLE_ID" ]; then
+    CONSUMMABLE_ID=`$CMD_SNMPWALK -t 2 -r 2 -v 1 -c $COMMUNITY $HOSTNAME $OID_NAME_OTHER | $CMD_GREP -i "${CONSUMMABLE_NAME}" | $CMD_AWK '{ print $1 }' | $CMD_AWK -F "." '{print $NF}'`
+  fi
+
+  if [ -n "$CONSUMMABLE_ID" ]; then
+    CONSUMMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL}.${CONSUMMABLE_ID}`
+    CONSUMMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS}.${CONSUMMABLE_ID}`
+
+    if [ ${CONSUMMABLE_TOTAL: 0:1} = "-" ]; then
+      CONSUMMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL_OTHER}.${CONSUMMABLE_ID}`
+      CONSUMMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS_OTHER}.${CONSUMMABLE_ID}`
+    fi
+
+    if [ -n "$CONSUMMABLE_TOTAL" ] && [ -n "$CONSUMMABLE_STATUS" ]; then
+
+      CONSUMMABLE_POURCENT=`$CMD_EXPR \( $CONSUMMABLE_STATUS \* 100 \) / \( $CONSUMMABLE_TOTAL \)`
+      CONSUMMABLE_USED_POURCENT=`$CMD_EXPR 100 \- $CONSUMMABLE_POURCENT`
+
+      if [ $WARNING != 0 ] || [ $CRITICAL != 0 ]; then
+
+        if [ $CONSUMMABLE_USED_POURCENT -gt $CRITICAL ] && [ $CRITICAL != 0 ]; then
+          STATE=$STATE_CRITICAL
+        elif [ $CONSUMMABLE_USED_POURCENT -gt $WARNING ] && [ $WARNING != 0 ]; then
+          STATE=$STATE_WARNING
+        else
+          STATE=$STATE_OK
+        fi
+      else
+        STATE=$STATE_OK
+      fi
+
+      case "$CONSUMMABLE" in
+        black)
+          CONSUMMABLE_NAME="of the black cartridge"
+        ;;
+        cyan)
+          CONSUMMABLE_NAME="of the cyan cartridge"
+        ;;
+        magenta)
+          CONSUMMABLE_NAME="of the magenta cartridge"
+        ;;
+        yellow)
+          CONSUMMABLE_NAME="of the yellow cartridge"
+        ;;
+        drum)
+          CONSUMMABLE_NAME="of the printing device"
+        ;;
+        *)
+          CONSUMMABLE_NAME="of the consummable"
+      esac
+
+      DESCRIPTION="Utilisation $CONSUMMABLE_NAME : ${CONSUMMABLE_USED_POURCENT}% | cons_used=${CONSUMMABLE_USED_POURCENT};$WARNING;$CRITICAL;0"
+    else
+      DESCRIPTION="Printer is waiting"
+    fi
+  fi
+elif [ $TYPE = "page" ]; then
+  # Check page number of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t page)
+  PAGES=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME $OID_PAGE`
+  if [ -n "$PAGES" ]; then
+    DESCRIPTION="Page number : $PAGES | pages=$PAGES;0;0;0"
+    STATE=$STATE_OK
+  fi
+fi
+
+echo $DESCRIPTION
+exit $STATE
