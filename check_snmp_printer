@@ -7,11 +7,11 @@
 # Licence : GPLv2
 
 # Commands
-CMD_BASENAME="/bin/basename"
+CMD_BASENAME="/usr/bin/basename"
 CMD_SNMPGET="/usr/bin/snmpget"
 CMD_SNMPWALK="/usr/bin/snmpwalk"
 CMD_GREP="/bin/grep"
-CMD_AWK="/bin/awk"
+CMD_AWK="/usr/bin/awk"
 CMD_EXPR="/usr/bin/expr"
 
 # Script name
@@ -45,20 +45,40 @@ STATE=$STATE_UNKNOWN
 COMMUNITY="public"
 HOSTNAME="127.0.0.1"
 TYPE="page"
-CONSUMMABLE="black"
+CONSUMABLE="black"
 WARNING=0
 CRITICAL=0
+VERBOSE="false"
 
 # Option processing
 print_usage() {
-  echo "Usage: ./check_snmp_printer -H 127.0.0.1 -C public -t consummable -o black -w 85 -c 90"
-  echo "  $SCRIPTNAME -H ADDRESS"
-  echo "  $SCRIPTNAME -C STRING"
-  echo "  $SCRIPTNAME -t STRING"
-  echo "  $SCRIPTNAME -w INTEGER"
-  echo "  $SCRIPTNAME -c INTEGER"
-  echo "  $SCRIPTNAME -h"
-  echo "  $SCRIPTNAME -V"
+  echo "Usage: ${SCRIPTNAME} [options] | -h | -V"
+  echo ""
+  echo "Options:"
+  echo -e "\t-H ADDRESS"
+  echo -e "\t   Name or IP address of host (default: 127.0.0.1)"
+  echo -e "\t-C STRING"
+  echo -e "\t   Community name for the host's SNMP agent (default: public)"
+  echo -e "\t-t STRING"
+  echo -e "\t   Check type (consumable, page) (default: page)"
+  echo -e "\t-o STRING"
+  echo -e "\t   Consummable (black, cyan, magenta, yellow, drum) (default: black)"
+  echo -e "\t-w INTEGER"
+  echo -e "\t   Warning level for the checked resource (default: 0)"
+  echo -e "\t-c INTEGER"
+  echo -e "\t   Critical level for the checked resource (default: 0)"
+  echo -e "\t-v"
+  echo -e "\t   Enable verbose mode, printing raw output from SNMP"
+  echo -e "\t-d"
+  echo -e "\t   Enable debugging output"
+  echo -e "\t-h"
+  echo -e "\t   Print this help screen"
+  echo -e "\t-V"
+  echo -e "\t   Print version and license information"
+  echo ""
+  echo "The warning and critical levels are intepreted differently, depending on the type of resource."
+  echo "For pages, the values are absolute (i.e. raise alerts at a particular number of printed pages)."
+  echo "For consumables, the value is interpreted as percent used. "
 }
 
 print_version() {
@@ -73,40 +93,24 @@ print_help() {
   echo ""
   print_usage
   echo ""
-  echo "Check the status of the printer"
-  echo ""
-  echo "-H ADDRESS"
-  echo "   Name or IP address of host (default: 127.0.0.1)"
-  echo "-C STRING"
-  echo "   Community name for the host's SNMP agent (default: public)"
-  echo "-t STRING"
-  echo "   Check type (consummable, page) (default: page)"
-  echo "-o STRING"
-  echo "   Consummable (black, cyan, magenta, yellow, drum) (default: black)"
-  echo "-w INTEGER"
-  echo "   Warning level for consummable in percent (default: 0)"
-  echo "-c INTEGER"
-  echo "   Critical level for consummable in percent (default: 0)"
-  echo "-h"
-  echo "   Print this help screen"
-  echo "-V"
-  echo "   Print version and license information"
-  echo ""
-  echo ""
   echo "This plugin uses the 'snmpget' command and 'snmpwalk' command included with the NET-SNMP package."
   echo "This plugin support performance data output."
   echo "If the percentage of the warning level and the critical level are 0, then the script returns a state OK."
+  echo ""
+  echo ""
+  echo "Example: ./check_snmp_printer -H 127.0.0.1 -C public -t consumable -o black -w 85 -c 90"
 }
 
-while getopts H:C:t:o:w:c:hV OPT
+while getopts H:C:t:o:w:c:vhV OPT
 do
   case $OPT in
     H) HOSTNAME="$OPTARG" ;;
     C) COMMUNITY="$OPTARG" ;;
     t) TYPE="$OPTARG" ;;
-    o) CONSUMMABLE="$OPTARG" ;;
+    o) CONSUMABLE="$OPTARG" ;;
     w) WARNING=$OPTARG ;;
     c) CRITICAL=$OPTARG ;;
+    v) VERBOSE="true" ;;
     h)
       print_help
       exit $STATE_UNKNOWN
@@ -118,68 +122,93 @@ do
    esac
 done
 
+# sets the STATE variable depending on the warning and critial levels for the 
+# input level (parameter 1)
+function set_status() {
+  local LEVEL="$1"
+
+  if [ $LEVEL -gt $CRITICAL ] && [ $CRITICAL != 0 ]; then
+    if [ "$VERBOSE" = true ]; then
+      echo "Reporting as critical since ${LEVEL} is greater than ${CRITICAL}"
+    fi
+    STATE=$STATE_CRITICAL
+  elif [ $LEVEL -gt $WARNING ] && [ $WARNING != 0 ]; then
+    if [ "$VERBOSE" = true ]; then
+      echo "Reporting as warning since ${LEVEL} is greater than ${WARNING}"
+    fi
+    STATE=$STATE_WARNING
+  else
+    STATE=$STATE_OK
+  fi
+}
+
+
 # Plugin processing
-if [ $TYPE = "consummable" ]; then
-  # Check the consummable of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t consummable -o black -w 85 -c 90)
-  CONSUMMABLE_NAME=$CONSUMMABLE
+if [ $TYPE = "consumable" ] || [ $TYPE = "consummable" ]; then
+  # Check the consumable of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t consumable -o black -w 85 -c 90)
+  # Note: Older versions of the script misspelled "consumable" as "consummable", so we allow for both spellings here to preserve compatibility
+  CONSUMABLE_NAME=$CONSUMABLE
 
-  if [ $CONSUMMABLE = "black" ]; then
-    CONSUMMABLE_NAME="black\|cartouche\|toner"
+  if [ $CONSUMABLE = "black" ]; then
+    CONSUMABLE_NAME="black\|cartouche\|toner"
   fi
 
-  CONSUMMABLE_ID=`$CMD_SNMPWALK -t 2 -r 2 -v 1 -c $COMMUNITY $HOSTNAME $OID_NAME | $CMD_GREP -i "${CONSUMMABLE_NAME}" | $CMD_AWK '{ print $1 }' | $CMD_AWK -F "." '{print $NF}'`
-  if [ -z "$CONSUMMABLE_ID" ]; then
-    CONSUMMABLE_ID=`$CMD_SNMPWALK -t 2 -r 2 -v 1 -c $COMMUNITY $HOSTNAME $OID_NAME_OTHER | $CMD_GREP -i "${CONSUMMABLE_NAME}" | $CMD_AWK '{ print $1 }' | $CMD_AWK -F "." '{print $NF}'`
+  CONSUMABLE_ID=`$CMD_SNMPWALK -t 2 -r 2 -v 1 -c $COMMUNITY $HOSTNAME $OID_NAME | $CMD_GREP -i "${CONSUMABLE_NAME}" | $CMD_AWK '{ print $1 }' | $CMD_AWK -F "." '{print $NF}'`
+  if [ -z "$CONSUMABLE_ID" ]; then
+    CONSUMABLE_ID=`$CMD_SNMPWALK -t 2 -r 2 -v 1 -c $COMMUNITY $HOSTNAME $OID_NAME_OTHER | $CMD_GREP -i "${CONSUMABLE_NAME}" | $CMD_AWK '{ print $1 }' | $CMD_AWK -F "." '{print $NF}'`
   fi
 
-  if [ -n "$CONSUMMABLE_ID" ]; then
-    CONSUMMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL}.${CONSUMMABLE_ID}`
-    CONSUMMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS}.${CONSUMMABLE_ID}`
+  if [ "$VERBOSE" = true ]; then
+    echo "ID of ${CONSUMABLE} consumable: ${CONSUMABLE_ID}"
+  fi
 
-    if [ ${CONSUMMABLE_TOTAL: 0:1} = "-" ]; then
-      CONSUMMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL_OTHER}.${CONSUMMABLE_ID}`
-      CONSUMMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS_OTHER}.${CONSUMMABLE_ID}`
+  if [ -n "$CONSUMABLE_ID" ]; then
+    CONSUMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL}.${CONSUMABLE_ID}`
+    CONSUMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS}.${CONSUMABLE_ID}`
+
+    if [ ${CONSUMABLE_TOTAL: 0:1} = "-" ]; then
+      CONSUMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL_OTHER}.${CONSUMABLE_ID}`
+      CONSUMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS_OTHER}.${CONSUMABLE_ID}`
     fi
 
-    if [ -n "$CONSUMMABLE_TOTAL" ] && [ -n "$CONSUMMABLE_STATUS" ]; then
+    if [ "$VERBOSE" = true ]; then
+      echo "Consumable total value: ${CONSUMABLE_TOTAL}"
+      echo "Consumable current value: ${CONSUMABLE_STATUS}"
+    fi
 
-      CONSUMMABLE_POURCENT=`$CMD_EXPR \( $CONSUMMABLE_STATUS \* 100 \) / \( $CONSUMMABLE_TOTAL \)`
-      CONSUMMABLE_USED_POURCENT=`$CMD_EXPR 100 \- $CONSUMMABLE_POURCENT`
+    if [ -n "$CONSUMABLE_TOTAL" ] && [ -n "$CONSUMABLE_STATUS" ]; then
 
-      if [ $WARNING != 0 ] || [ $CRITICAL != 0 ]; then
+      CONSUMABLE_PERCENT=`$CMD_EXPR \( $CONSUMABLE_STATUS \* 100 \) / \( $CONSUMABLE_TOTAL \)`
+      CONSUMABLE_USED_PERCENT=`$CMD_EXPR 100 \- $CONSUMABLE_PERCENT`
 
-        if [ $CONSUMMABLE_USED_POURCENT -gt $CRITICAL ] && [ $CRITICAL != 0 ]; then
-          STATE=$STATE_CRITICAL
-        elif [ $CONSUMMABLE_USED_POURCENT -gt $WARNING ] && [ $WARNING != 0 ]; then
-          STATE=$STATE_WARNING
-        else
-          STATE=$STATE_OK
-        fi
-      else
-        STATE=$STATE_OK
+      if [ "$VERBOSE" = true ]; then
+        echo "Consumable percent available: ${CONSUMABLE_PERCENT}"
+        echo "Consumable percent used: ${CONSUMABLE_USED_PERCENT}"
       fi
 
-      case "$CONSUMMABLE" in
+      set_status "${CONSUMABLE_USED_PERCENT}"
+
+      case "$CONSUMABLE" in
         black)
-          CONSUMMABLE_NAME="of the black cartridge"
+          CONSUMABLE_NAME="of the black cartridge"
         ;;
         cyan)
-          CONSUMMABLE_NAME="of the cyan cartridge"
+          CONSUMABLE_NAME="of the cyan cartridge"
         ;;
         magenta)
-          CONSUMMABLE_NAME="of the magenta cartridge"
+          CONSUMABLE_NAME="of the magenta cartridge"
         ;;
         yellow)
-          CONSUMMABLE_NAME="of the yellow cartridge"
+          CONSUMABLE_NAME="of the yellow cartridge"
         ;;
         drum)
-          CONSUMMABLE_NAME="of the printing device"
+          CONSUMABLE_NAME="of the printing device"
         ;;
         *)
-          CONSUMMABLE_NAME="of the consummable"
+          CONSUMABLE_NAME="of the consumable"
       esac
 
-      DESCRIPTION="Utilisation $CONSUMMABLE_NAME : ${CONSUMMABLE_USED_POURCENT}% | cons_used=${CONSUMMABLE_USED_POURCENT};$WARNING;$CRITICAL;0"
+      DESCRIPTION="Utilisation $CONSUMABLE_NAME : ${CONSUMABLE_USED_PERCENT}% | cons_used=${CONSUMABLE_USED_PERCENT};$WARNING;$CRITICAL;0"
     else
       DESCRIPTION="Printer is waiting"
     fi
@@ -188,8 +217,8 @@ elif [ $TYPE = "page" ]; then
   # Check page number of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t page)
   PAGES=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME $OID_PAGE`
   if [ -n "$PAGES" ]; then
-    DESCRIPTION="Page number : $PAGES | pages=$PAGES;0;0;0"
-    STATE=$STATE_OK
+    DESCRIPTION="Page number : $PAGES | pages=$PAGES;${WARNING};${CRITICAL};0"
+    set_status "${PAGES}"
   fi
 fi
 
