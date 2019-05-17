@@ -11,8 +11,6 @@ CMD_BASENAME="/usr/bin/basename"
 CMD_SNMPGET="/usr/bin/snmpget"
 CMD_SNMPWALK="/usr/bin/snmpwalk"
 CMD_GREP="/bin/grep"
-CMD_AWK="/usr/bin/awk"
-CMD_EXPR="/usr/bin/expr"
 
 # Script name
 SCRIPTNAME=`$CMD_BASENAME $0`
@@ -27,13 +25,9 @@ STATE_CRITICAL=2
 STATE_UNKNOWN=3
 
 # Default OID (Printer-MIB)
-OID_NAME=".1.3.6.1.2.1.43.11.1.1.6.1"
-OID_TOTAL=".1.3.6.1.2.1.43.11.1.1.8.1"
-OID_STATUS=".1.3.6.1.2.1.43.11.1.1.9.1"
-
-OID_NAME_OTHER=".1.3.6.1.2.1.43.12.1.1.4.1"
-OID_TOTAL_OTHER=".1.3.6.1.2.1.43.10.2.1.9.1"
-OID_STATUS_OTHER=".1.3.6.1.2.1.43.10.2.1.10.1"
+OID_NAMES=(   ".1.3.6.1.2.1.43.11.1.1.6.1" ".1.3.6.1.2.1.43.12.1.1.4.1")
+OID_TOTALS=(  ".1.3.6.1.2.1.43.11.1.1.8.1" ".1.3.6.1.2.1.43.10.2.1.9.1")
+OID_STATUSES=(".1.3.6.1.2.1.43.11.1.1.9.1" ".1.3.6.1.2.1.43.10.2.1.10.1")
 
 OID_PAGE=".1.3.6.1.2.1.43.10.2.1.4.1.1"
 
@@ -101,30 +95,32 @@ print_help() {
   echo "Example: ./check_snmp_printer -H 127.0.0.1 -C public -t consumable -o black -w 85 -c 90"
 }
 
-while getopts H:C:t:o:w:c:vhV OPT
-do
-  case $OPT in
-    H) HOSTNAME="$OPTARG" ;;
-    C) COMMUNITY="$OPTARG" ;;
-    t) TYPE="$OPTARG" ;;
-    o) CONSUMABLE="$OPTARG" ;;
-    w) WARNING=$OPTARG ;;
-    c) CRITICAL=$OPTARG ;;
-    v) VERBOSE="true" ;;
-    h)
-      print_help
-      exit $STATE_UNKNOWN
-      ;;
-    V)
-      print_version
-      exit $STATE_UNKNOWN
-      ;;
-   esac
-done
+function parse_parameters() {
+  while getopts H:C:t:o:w:c:vhV OPT
+  do
+    case $OPT in
+      H) HOSTNAME="$OPTARG" ;;
+      C) COMMUNITY="$OPTARG" ;;
+      t) TYPE="$OPTARG" ;;
+      o) CONSUMABLE="$OPTARG" ;;
+      w) WARNING=$OPTARG ;;
+      c) CRITICAL=$OPTARG ;;
+      v) VERBOSE="true" ;;
+      h)
+        print_help
+        exit $STATE_UNKNOWN
+        ;;
+      V)
+        print_version
+        exit $STATE_UNKNOWN
+        ;;
+     esac
+  done
+}
 
 # sets the STATE variable depending on the warning and critial levels for the 
 # input level (parameter 1)
-function set_status() {
+set_status() {
   local LEVEL="$1"
 
   if [ $LEVEL -gt $CRITICAL ] && [ $CRITICAL != 0 ]; then
@@ -143,33 +139,53 @@ function set_status() {
 }
 
 
-# Plugin processing
-if [ $TYPE = "consumable" ] || [ $TYPE = "consummable" ]; then
-  # Check the consumable of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t consumable -o black -w 85 -c 90)
-  # Note: Older versions of the script misspelled "consumable" as "consummable", so we allow for both spellings here to preserve compatibility
-  CONSUMABLE_NAME=$CONSUMABLE
+# Check the consumable of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t consumable -o black -w 85 -c 90)
+# NOTE: This function will update the global DESCRIPTION and STATE variables!
+check_consumable() {
+
+  local CONSUMABLE_NAME=$CONSUMABLE
 
   if [ $CONSUMABLE = "black" ]; then
     CONSUMABLE_NAME="black\|cartouche\|toner"
   fi
 
-  CONSUMABLE_ID=`$CMD_SNMPWALK -t 2 -r 2 -v 1 -c $COMMUNITY $HOSTNAME $OID_NAME | $CMD_GREP -i "${CONSUMABLE_NAME}" | $CMD_AWK '{ print $1 }' | $CMD_AWK -F "." '{print $NF}'`
-  if [ -z "$CONSUMABLE_ID" ]; then
-    CONSUMABLE_ID=`$CMD_SNMPWALK -t 2 -r 2 -v 1 -c $COMMUNITY $HOSTNAME $OID_NAME_OTHER | $CMD_GREP -i "${CONSUMABLE_NAME}" | $CMD_AWK '{ print $1 }' | $CMD_AWK -F "." '{print $NF}'`
-  fi
+  # look through the OIDs for consumables to find the one we need...
+  local CONSUMABLE_ID=""
+  for OID_NAME in ${OID_NAMES}; do
+    # skip if we already found a match (CONSUMABLE_ID is not empty)
+    if [ -z "$CONSUMABLE_ID" ]; then
+      # output from snmpwalk will be a list of lines like:
+      #    .1.3.6.1.2.1.43.11.1.1.6.1.1 = STRING: "Black Cartridge HP CF410A"
+      #    .1.3.6.1.2.1.43.11.1.1.6.1.2 = STRING: "Cyan Cartridge HP CF411A"
+      #    .1.3.6.1.2.1.43.11.1.1.6.1.3 = STRING: "Magenta Cartridge HP CF413A"
+      #    .1.3.6.1.2.1.43.11.1.1.6.1.4 = STRING: "Yellow Cartridge HP CF412A"
+      # this command will first grep the consumable (e.g. "magenta"):
+      #    .1.3.6.1.2.1.43.11.1.1.6.1.3 = STRING: "Magenta Cartridge HP CF413A"
+      # it will then grab the first word, ".1.3.6.1.2.1.43.11.1.1.6.1.3", using the first read-pipe
+      # then it will put the OID components into the array $oid[] by changing the separator to a dot
+      # then it will pick out the last element (${oid[-1]}), but only if the array is non-empty...
+      local CONSUMABLE_ID=$($CMD_SNMPWALK -t 2 -r 2 -v 1 -On -c $COMMUNITY $HOSTNAME $OID_NAME | $CMD_GREP -i "${CONSUMABLE_NAME}" | { read first _; echo $first; } | { IFS="."; read all; oid=($all);  if [ "${#oid[@]}" -gt 0 ]; then echo ${oid[-1]}; fi })
+    fi
+  done
 
   if [ "$VERBOSE" = true ]; then
     echo "ID of ${CONSUMABLE} consumable: ${CONSUMABLE_ID}"
   fi
 
   if [ -n "$CONSUMABLE_ID" ]; then
-    CONSUMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL}.${CONSUMABLE_ID}`
-    CONSUMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS}.${CONSUMABLE_ID}`
 
-    if [ ${CONSUMABLE_TOTAL: 0:1} = "-" ]; then
-      CONSUMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL_OTHER}.${CONSUMABLE_ID}`
-      CONSUMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS_OTHER}.${CONSUMABLE_ID}`
-    fi
+    # loop through OIDs for total and status for consumable
+    local CONSUMABLE_TOTAL="-1"
+    for i in ${!OID_TOTALS[@]}; do
+      # skip if we have already found a positive total
+      if [ ${CONSUMABLE_TOTAL: 0:1} = "-" ]; then
+        local OID_TOTAL=${OID_TOTALS[$i]}
+        local OID_STATUS=${OID_STATUSES[$i]}
+
+        local CONSUMABLE_TOTAL=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq  $HOSTNAME ${OID_TOTAL}.${CONSUMABLE_ID}`
+        local CONSUMABLE_STATUS=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME ${OID_STATUS}.${CONSUMABLE_ID}`
+      fi
+    done
 
     if [ "$VERBOSE" = true ]; then
       echo "Consumable total value: ${CONSUMABLE_TOTAL}"
@@ -178,8 +194,9 @@ if [ $TYPE = "consumable" ] || [ $TYPE = "consummable" ]; then
 
     if [ -n "$CONSUMABLE_TOTAL" ] && [ -n "$CONSUMABLE_STATUS" ]; then
 
-      CONSUMABLE_PERCENT=`$CMD_EXPR \( $CONSUMABLE_STATUS \* 100 \) / \( $CONSUMABLE_TOTAL \)`
-      CONSUMABLE_USED_PERCENT=`$CMD_EXPR 100 \- $CONSUMABLE_PERCENT`
+      
+      let "CONSUMABLE_PERCENT = ( CONSUMABLE_STATUS * 100 ) / ( CONSUMABLE_TOTAL )"
+      let "CONSUMABLE_USED_PERCENT = 100 - CONSUMABLE_PERCENT"
 
       if [ "$VERBOSE" = true ]; then
         echo "Consumable percent available: ${CONSUMABLE_PERCENT}"
@@ -213,13 +230,32 @@ if [ $TYPE = "consumable" ] || [ $TYPE = "consummable" ]; then
       DESCRIPTION="Printer is waiting"
     fi
   fi
-elif [ $TYPE = "page" ]; then
-  # Check page number of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t page)
-  PAGES=`$CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME $OID_PAGE`
+}
+
+
+# Check page number of the printer (Usage : ./check_snmp_printer -H 127.0.0.1 -C public -t page)
+# NOTE: This function will update the global DESCRIPTION and STATE variables!
+check_pages() {
+  PAGES=$($CMD_SNMPGET -t 2 -r 2 -v 1 -c $COMMUNITY -Ovq $HOSTNAME $OID_PAGE)
   if [ -n "$PAGES" ]; then
     DESCRIPTION="Page number : $PAGES | pages=$PAGES;${WARNING};${CRITICAL};0"
     set_status "${PAGES}"
   fi
+}
+
+# Check parameters
+parse_parameters $*
+
+# Check for type of resource
+if [ $TYPE = "consumable" ] || [ $TYPE = "consummable" ]; then
+  # Note: Older versions of the script misspelled "consumable" as "consummable", so we allow for both spellings here to preserve compatibility
+
+  check_consumable
+
+elif [ $TYPE = "page" ]; then
+
+  check_pages
+
 fi
 
 echo $DESCRIPTION
