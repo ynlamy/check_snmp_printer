@@ -9,13 +9,21 @@ Name or IP address of host (default: 127.0.0.1)
 -C STRING
 Community name for the host's SNMP agent (default: public)
 -t STRING
-Check type (consummable, page) (default: page)
+Check type (consumable, page, model, serial) (default: page)
 -o STRING
-Consummable (black, cyan, magenta, yellow, drum) (default: black)
+Consumable (black, cyan, magenta, yellow, drum) (default: black)
 -w INTEGER
-Warning level for consummable in percent (default: 0)
+Warning level for consumable in percent (default: 0)
 -c INTEGER
-Critical level for consummable in percent (default: 0)
+Critical level for consumable in percent (default: 0)
+-X STRING
+Overwrites OID used in check type PAGE, MODEL and SERIAL. Also used for check type CONSUMABLE (replaces OID_NAME)
+-Y STRING
+Overwrites OID used in check type CONSUMABLE (replaces OID_TOTAL)
+-Z STRING
+Overwrites OID used in check type CONSUMABLE (replaces OID_STATUS)
+-n
+Use SNMPGETNEXT instead of SNMPGET command
 -h
 Print this help screen
 -V
@@ -26,7 +34,7 @@ This plugin support performance data output. If the percentage of the warning le
 
 Examples :
 
-./check_snmp_printer -H xxx.xxx.xxx.xxx -C public -t consummable -o black -w 85 -c 90
+./check_snmp_printer -H xxx.xxx.xxx.xxx -C public -t consummable -o black -w 15 -c 10
 ./check_snmp_printer -H xxx.xxx.xxx.xxx -C public -t page
 
 This nagios plugins comes with ABSOLUTELY NO WARRANTY.
