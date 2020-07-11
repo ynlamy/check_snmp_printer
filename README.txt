@@ -2,7 +2,7 @@ This plugin can check your printer consumables status using SNMP v1 queries.
 
 check_snmp_printer is written in Bash and is distributed under the GPLv2 license. This plugin have been created by Yoann LAMY.
 
-Usage: ./check_snmp_printer -H xxx.xxx.xxx.xxx -C public -t consummable -o black -w 85 -c 90
+Usage: ./check_snmp_printer -H xxx.xxx.xxx.xxx -C public -t consummable -o black -w 15 -c 10
 
 -H ADDRESS
 Name or IP address of host (default: 127.0.0.1)
