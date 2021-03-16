@@ -11,7 +11,7 @@ Community name for the host's SNMP agent (default: public)
 -t STRING
 Check type (consumable, page, info) (default: page)
 -o STRING
-Consummable (black, cyan, magenta, yellow, drum) (default: black)
+Consumable (black, cyan, magenta, yellow, drum) (default: black)
 -w INTEGER
 Warning level for consummable in percent (default: 0)
 -c INTEGER
@@ -26,7 +26,7 @@ This plugin support performance data output. If the percentage of the warning le
 
 Examples :
 
-./check_snmp_printer -H xxx.xxx.xxx.xxx -C public -t consummable -o black -w 85 -c 90
+./check_snmp_printer -H xxx.xxx.xxx.xxx -C public -t consumable -o black -w 85 -c 90
 ./check_snmp_printer -H xxx.xxx.xxx.xxx -C public -t page
 
 This nagios plugins comes with ABSOLUTELY NO WARRANTY.
